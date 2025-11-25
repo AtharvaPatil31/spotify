@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
-import 'package:spotify/core/configs/assets/app_vectors.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'verify_otp.dart';
+import 'package:spotify/core/configs/assets/app_vectors.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -19,36 +18,32 @@ class _RegisterPageState extends State<RegisterPage> {
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _obscurePassword = true;
-  String _passwordStrength = '';
   final _formKey = GlobalKey<FormState>();
 
   Future<void> sendOTP(String phoneNumber) async {
     try {
-      final response = await http.post(
-        Uri.parse('http://10.0.2.2:3000/send-otp'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'phone': '+91$phoneNumber'}),
+      final supabase = Supabase.instance.client;
+
+      // Send OTP via Supabase
+      await supabase.auth.signInWithOtp(
+        phone: '+91$phoneNumber',
       );
 
-      final data = jsonDecode(response.body);
-      if (data['success']) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('OTP Sent!')),
-        );
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => VerifyOTPPage(phoneNumber: '+91$phoneNumber'),
+      // Navigate to Verify OTP Page
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => VerifyOTPPage(
+            phoneNumber: '+91$phoneNumber',
+            fullName: _nameController.text.trim(),
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
           ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error sending OTP: ${data['error']}')),
-        );
-      }
+        ),
+      );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
+        SnackBar(content: Text('Error sending OTP: $e')),
       );
     }
   }
@@ -64,7 +59,6 @@ class _RegisterPageState extends State<RegisterPage> {
         TextInputType keyboardType = TextInputType.text,
         List<TextInputFormatter>? inputFormatters,
         String? Function(String?)? validator,
-        void Function(String)? onChanged,
       }) {
     return TextFormField(
       controller: controller,
@@ -72,7 +66,6 @@ class _RegisterPageState extends State<RegisterPage> {
       keyboardType: keyboardType,
       inputFormatters: inputFormatters,
       validator: validator,
-      onChanged: onChanged,
       style: TextStyle(color: textColor),
       decoration: InputDecoration(
         labelText: labelText,
@@ -121,44 +114,23 @@ class _RegisterPageState extends State<RegisterPage> {
                   ),
                 ),
                 const SizedBox(height: 30),
-
                 _buildTextField(_nameController, 'Full Name', textColor, hintColor, fillColor,
                     validator: (value) => value!.trim().isEmpty ? 'Full Name is required' : null),
                 const SizedBox(height: 20),
-
-                _buildTextField(
-                  _emailController,
-                  'Email Address',
-                  textColor,
-                  hintColor,
-                  fillColor,
-                  keyboardType: TextInputType.emailAddress,
-                  validator: (value) => value!.trim().isEmpty ? 'Email is required' : null,
-                ),
+                _buildTextField(_emailController, 'Email Address', textColor, hintColor, fillColor,
+                    keyboardType: TextInputType.emailAddress,
+                    validator: (value) => value!.trim().isEmpty ? 'Email is required' : null),
                 const SizedBox(height: 20),
-
-                _buildTextField(
-                  _phoneController,
-                  'Phone Number',
-                  textColor,
-                  hintColor,
-                  fillColor,
-                  keyboardType: TextInputType.phone,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
-                  validator: (value) {
-                    if (value == null || value.isEmpty) return 'Phone number required';
-                    if (value.length != 10) return 'Phone number must be 10 digits';
-                    return null;
-                  },
-                ),
+                _buildTextField(_phoneController, 'Phone Number', textColor, hintColor, fillColor,
+                    keyboardType: TextInputType.phone,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
+                    validator: (value) {
+                      if (value == null || value.isEmpty) return 'Phone number required';
+                      if (value.length != 10) return 'Phone number must be 10 digits';
+                      return null;
+                    }),
                 const SizedBox(height: 20),
-
-                _buildTextField(
-                  _passwordController,
-                  'Create Password',
-                  textColor,
-                  hintColor,
-                  fillColor,
+                _buildTextField(_passwordController, 'Create Password', textColor, hintColor, fillColor,
                   obscureText: _obscurePassword,
                   suffixIcon: IconButton(
                     icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility, color: hintColor),
@@ -167,14 +139,13 @@ class _RegisterPageState extends State<RegisterPage> {
                   validator: (value) => value!.isEmpty ? 'Password is required' : null,
                 ),
                 const SizedBox(height: 20),
-
                 SizedBox(
                   width: double.infinity,
                   height: 50,
                   child: OutlinedButton(
                     onPressed: () {
                       if (_formKey.currentState!.validate()) {
-                        sendOTP(_phoneController.text);
+                        sendOTP(_phoneController.text.trim());
                       }
                     },
                     style: OutlinedButton.styleFrom(

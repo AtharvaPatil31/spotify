@@ -1,21 +1,37 @@
-import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../home/home_page.dart';
 
 class VerifyOTPPage extends StatefulWidget {
   final String phoneNumber;
+  final String fullName;
+  final String email;
+  final String password;
 
-  const VerifyOTPPage({super.key, required this.phoneNumber});
+  const VerifyOTPPage({
+    super.key,
+    required this.phoneNumber,
+    required this.fullName,
+    required this.email,
+    required this.password,
+  });
 
   @override
   State<VerifyOTPPage> createState() => _VerifyOTPPageState();
 }
 
 class _VerifyOTPPageState extends State<VerifyOTPPage> {
-  final List<TextEditingController> _controllers = List.generate(4, (_) => TextEditingController());
-  final List<FocusNode> _focusNodes = List.generate(4, (_) => FocusNode());
+  final List<TextEditingController> _controllers = List.generate(6, (_) => TextEditingController());
+  final List<FocusNode> _focusNodes = List.generate(6, (_) => FocusNode());
   bool _isOTPFilled = false;
+  String? _errorMessage;
+
+  Timer? _timer;
+  int _secondsRemaining = 30;
+  bool _canResend = false;
 
   @override
   void initState() {
@@ -23,59 +39,114 @@ class _VerifyOTPPageState extends State<VerifyOTPPage> {
     for (var controller in _controllers) {
       controller.addListener(_checkOTPFilled);
     }
+    _startResendTimer();
   }
 
   void _checkOTPFilled() {
     setState(() {
       _isOTPFilled = _controllers.every((c) => c.text.length == 1);
+      if (_isOTPFilled) _errorMessage = null;
     });
   }
 
+  void _startResendTimer() {
+    setState(() {
+      _secondsRemaining = 30;
+      _canResend = false;
+    });
+
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_secondsRemaining == 0) {
+        setState(() => _canResend = true);
+        _timer?.cancel();
+      } else {
+        setState(() => _secondsRemaining--);
+      }
+    });
+  }
+
+  Future<void> _resendOTP() async {
+    try {
+      final supabase = Supabase.instance.client;
+      await supabase.auth.signInWithOtp(phone: widget.phoneNumber);
+      setState(() {
+        _errorMessage = 'OTP Sent Again!';
+      });
+      _startResendTimer();
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Error resending OTP';
+      });
+    }
+  }
+
   Future<void> _submitOTP() async {
-    if (!_isOTPFilled) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter complete 4-digit OTP')),
-      );
+    final otp = _controllers.map((c) => c.text).join();
+
+    if (!_isOTPFilled || otp.length != 6) {
+      setState(() {
+        _errorMessage = 'Please enter complete 6-digit OTP';
+      });
       return;
     }
 
-    final otp = _controllers.map((c) => c.text).join();
-
     try {
-      // Replace with your backend endpoint for OTP verification via Twilio
-      final response = await http.post(
-        Uri.parse('https://your-backend.com/verify-otp'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'phone': widget.phoneNumber, 'otp': otp}),
+      final supabase = Supabase.instance.client;
+      final response = await supabase.auth.verifyOTP(
+        phone: widget.phoneNumber,
+        token: otp,
+        type: OtpType.sms,
       );
 
-      final data = jsonDecode(response.body);
-      if (data['success'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('OTP Verified!')),
-        );
-        // TODO: Navigate to Home/Dashboard
+      if (response.user != null) {
+        // ✅ OTP Verified: Insert user data into Supabase profiles table
+        await supabase.from('profiles').insert({
+          'id': response.user!.id, // ⭐ This is the key fix - use auth user's ID
+          'full_name': widget.fullName,
+          'email': widget.email,
+          'phone_number': widget.phoneNumber,
+        });
+
+        // Navigate to Home Page
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const HomePage()),
+          );
+        }
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Invalid OTP')),
-        );
+        setState(() {
+          _errorMessage = 'Invalid OTP';
+        });
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error verifying OTP: $e')),
-      );
+      setState(() {
+        _errorMessage = 'Error: ${e.toString()}';
+      });
+      print('OTP Verification Error: $e'); // For debugging
     }
+  }
+
+  @override
+  void dispose() {
+    for (var c in _controllers) c.dispose();
+    for (var n in _focusNodes) n.dispose();
+    _timer?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor = isDark ? Colors.black : Colors.white;
     final textColor = isDark ? Colors.white : Colors.black;
     final buttonColor = const Color(0xFF1DB954);
 
     return Scaffold(
+      backgroundColor: bgColor,
       appBar: AppBar(
-        title: const Text('Verify OTP'),
+        title: Text('Verify OTP', style: TextStyle(color: textColor)),
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: IconThemeData(color: textColor),
@@ -86,15 +157,26 @@ class _VerifyOTPPageState extends State<VerifyOTPPage> {
           child: Column(
             children: [
               const SizedBox(height: 40),
-              Text('Enter the 4-digit OTP sent to', style: TextStyle(color: textColor, fontSize: 16)),
+              Text(
+                'Enter the 6-digit OTP sent to',
+                style: TextStyle(color: textColor, fontSize: 16, fontFamily: 'Satoshi'),
+              ),
               const SizedBox(height: 5),
-              Text(widget.phoneNumber, style: TextStyle(color: buttonColor, fontWeight: FontWeight.bold, fontSize: 16)),
+              Text(
+                widget.phoneNumber,
+                style: TextStyle(
+                  color: buttonColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  fontFamily: 'Satoshi',
+                ),
+              ),
               const SizedBox(height: 40),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: List.generate(4, (i) {
+                children: List.generate(6, (i) {
                   return SizedBox(
-                    width: 60,
+                    width: 50,
                     child: TextField(
                       controller: _controllers[i],
                       focusNode: _focusNodes[i],
@@ -103,14 +185,64 @@ class _VerifyOTPPageState extends State<VerifyOTPPage> {
                       maxLength: 1,
                       style: TextStyle(fontSize: 24, color: textColor),
                       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                      decoration: const InputDecoration(counterText: '', border: OutlineInputBorder()),
+                      autofillHints: const [AutofillHints.oneTimeCode],
+                      decoration: InputDecoration(
+                        counterText: '',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: textColor.withOpacity(0.3)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: buttonColor, width: 2),
+                        ),
+                      ),
                       onChanged: (val) {
-                        if (val.isNotEmpty && i < 3) _focusNodes[i + 1].requestFocus();
-                        else if (val.isEmpty && i > 0) _focusNodes[i - 1].requestFocus();
+                        if (val.isNotEmpty && i < 5) {
+                          _focusNodes[i + 1].requestFocus();
+                        } else if (val.isEmpty && i > 0) {
+                          _focusNodes[i - 1].requestFocus();
+                        }
                       },
                     ),
                   );
                 }),
+              ),
+              const SizedBox(height: 20),
+              if (_errorMessage != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(
+                    _errorMessage!,
+                    style: TextStyle(
+                      color: _errorMessage!.contains('Sent') ? buttonColor : Colors.red,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: 'Satoshi',
+                    ),
+                  ),
+                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    "Didn't receive the code? ",
+                    style: TextStyle(color: textColor.withOpacity(0.7), fontFamily: 'Satoshi'),
+                  ),
+                  TextButton(
+                    onPressed: _canResend ? _resendOTP : null,
+                    child: Text(
+                      _canResend ? 'Resend OTP' : 'Resend in $_secondsRemaining s',
+                      style: TextStyle(
+                        color: _canResend ? buttonColor : Colors.grey,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'Satoshi',
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 40),
               SizedBox(
@@ -119,10 +251,21 @@ class _VerifyOTPPageState extends State<VerifyOTPPage> {
                 child: ElevatedButton(
                   onPressed: _isOTPFilled ? _submitOTP : null,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: buttonColor,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    backgroundColor: _isOTPFilled ? buttonColor : Colors.grey,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                    disabledBackgroundColor: Colors.grey,
                   ),
-                  child: const Text('Verify OTP', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  child: const Text(
+                    'Verify OTP',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      fontFamily: 'Satoshi',
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -130,12 +273,5 @@ class _VerifyOTPPageState extends State<VerifyOTPPage> {
         ),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    for (var c in _controllers) c.dispose();
-    for (var n in _focusNodes) n.dispose();
-    super.dispose();
   }
 }
